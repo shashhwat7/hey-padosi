@@ -18,6 +18,11 @@ workbook.lastModifiedBy = 'Phase 1B Automated Testing Pipeline';
 workbook.created = new Date();
 workbook.modified = new Date();
 
+// LOCAL EMULATOR ONLY. Never run this against a production Firebase project.
+if (!process.env.FIRESTORE_EMULATOR_HOST) {
+  console.error('Refusing to seed: emulator not detected.');
+  process.exit(1);
+}
 // Utility for header styling
 const styleHeaderRow = (row) => {
   row.font = {
