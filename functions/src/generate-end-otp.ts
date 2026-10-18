@@ -8,6 +8,7 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { checkActiveStatus } from './moderation-helper';
 import { writeAuditEvent } from './audit';
 import { OTP_TTL_MS, generateOtpCode, generateSalt, hashOtp } from './otp';
+import { validateString } from './validation';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -27,10 +28,7 @@ export const generateEndOtp = onCall(
       throw new HttpsError('unauthenticated', 'Sign in required.');
     }
     const data = (request.data ?? {}) as { taskId?: unknown };
-    const taskId = data.taskId;
-    if (typeof taskId !== 'string' || taskId.length === 0) {
-      throw new HttpsError('invalid-argument', 'taskId is required.');
-    }
+    const taskId = validateString(data.taskId, 'taskId', 1, 100);
     const callerUid = request.auth.uid;
 
     const db = getFirestore();

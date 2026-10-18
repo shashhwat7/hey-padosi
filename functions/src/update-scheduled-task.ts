@@ -7,6 +7,7 @@ import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { checkActiveStatus } from './moderation-helper';
 import { SCHEDULING_CONFIG } from './activate-scheduled-tasks';
+import { validateNumber, validateString } from './validation';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -51,18 +52,13 @@ export const updateScheduledTask = onCall(
       newScheduledForMs?: unknown;
     };
 
-    const taskId = data.taskId;
-    const newScheduledForMs = Number(data.newScheduledForMs);
-
-    if (typeof taskId !== 'string' || taskId.length === 0) {
-      throw new HttpsError('invalid-argument', 'taskId is required.');
-    }
-    if (!Number.isFinite(newScheduledForMs)) {
-      throw new HttpsError(
-        'invalid-argument',
-        'valid newScheduledForMs is required.',
-      );
-    }
+    const taskId = validateString(data.taskId, 'taskId', 1, 100);
+    const newScheduledForMs = validateNumber(
+      data.newScheduledForMs,
+      'newScheduledForMs',
+      0,
+      Number.MAX_SAFE_INTEGER,
+    );
 
     const nowMs = Date.now();
     const validation = validateScheduledTime(newScheduledForMs, nowMs);

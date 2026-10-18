@@ -3,6 +3,13 @@ import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { recomputeTrustScore } from './recompute-trust-score';
 import { appendActivityLog, safeDisplayName } from './activity-log';
+import { checkActiveStatus, requireAdminRole } from './moderation-helper';
+import {
+  validateEnum,
+  validateNumber,
+  validateOptionalString,
+  validateString,
+} from './validation';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -19,14 +26,9 @@ export const applyModerationAction = onCall(
     const adminUid = request.auth.uid;
     const db = getFirestore();
 
-    // Verify admin role
-    const adminSnap = await db.collection('users').doc(adminUid).get();
-    if (!adminSnap.exists || adminSnap.data()?.isAdmin !== true) {
-      throw new HttpsError(
-        'permission-denied',
-        'Only administrators can perform moderation actions.',
-      );
-    }
+    // Verify active status and admin role
+    const adminData = await checkActiveStatus(db, adminUid);
+    requireAdminRole(adminData);
 
     const data = (request.data ?? {}) as {
       userId?: unknown;
@@ -36,27 +38,27 @@ export const applyModerationAction = onCall(
       reportId?: unknown;
     };
 
-    const userId = data.userId;
-    const action = data.action;
-    const reason = data.reason;
-    const durationDays = data.durationDays;
-    const reportId = data.reportId;
-
-    if (typeof userId !== 'string' || userId.length === 0) {
-      throw new HttpsError('invalid-argument', 'userId is required.');
-    }
-    if (
-      typeof action !== 'string' ||
-      !['warn', 'suspend', 'ban', 'dismiss'].includes(action)
-    ) {
+    const userId = validateString(data.userId, 'userId', 1, 100);
+    if (adminUid === userId) {
       throw new HttpsError(
         'invalid-argument',
-        'action must be warn, suspend, ban, or dismiss.',
+        'Administrators cannot apply moderation actions to themselves.',
       );
     }
-    if (typeof reason !== 'string' || reason.length === 0) {
-      throw new HttpsError('invalid-argument', 'reason is required.');
-    }
+
+    const action = validateEnum(data.action, 'action', [
+      'warn',
+      'suspend',
+      'ban',
+      'dismiss',
+    ] as const);
+
+    const reason = validateString(data.reason, 'reason', 1, 500);
+    const durationDays =
+      action === 'suspend'
+        ? validateNumber(data.durationDays, 'durationDays', 1, 365)
+        : undefined;
+    const reportId = validateOptionalString(data.reportId, 'reportId', 100);
 
     const userRef = db.collection('users').doc(userId);
     const userSnap = await userRef.get();

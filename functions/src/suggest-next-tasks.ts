@@ -19,6 +19,7 @@ import {
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { checkActiveStatus } from './moderation-helper';
 import { safeDisplayName } from './activity-log';
+import { validateString } from './validation';
 import {
   haversineM,
   isEligible,
@@ -57,10 +58,7 @@ export const suggestNextTasks = onCall(
     }
 
     const data = (request.data ?? {}) as { taskId?: unknown };
-    const completedTaskId = data.taskId;
-    if (typeof completedTaskId !== 'string' || completedTaskId.length === 0) {
-      throw new HttpsError('invalid-argument', 'taskId is required.');
-    }
+    const completedTaskId = validateString(data.taskId, 'taskId', 1, 100);
 
     const volunteerUid = request.auth.uid;
     const db = getFirestore();

@@ -6,9 +6,10 @@ import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import { logger } from 'firebase-functions/v2';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { checkActiveStatus } from './moderation-helper';
+import { checkActiveStatus, requireAdminRole, requireVolunteerRole } from './moderation-helper';
 import { recomputeTrustScore } from './recompute-trust-score';
 import { appendActivityLog, safeDisplayName } from './activity-log';
+import { validateEnum, validateString } from './validation';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -21,6 +22,8 @@ export function evaluateIdVerificationDecisionPure(params: {
   decision: 'approve' | 'reject';
   fileFound: boolean;
   rejectionReason?: string | undefined;
+  adminUid?: string | undefined;
+  targetUid?: string | undefined;
 }): {
   allowed: boolean;
   error?: string | undefined;
@@ -31,6 +34,16 @@ export function evaluateIdVerificationDecisionPure(params: {
     return {
       allowed: false,
       error: 'Only administrators can perform ID verification reviews.',
+    };
+  }
+  if (
+    params.adminUid &&
+    params.targetUid &&
+    params.adminUid === params.targetUid
+  ) {
+    return {
+      allowed: false,
+      error: 'Administrators cannot verify their own ID documents.',
     };
   }
   if (params.decision === 'approve') {
@@ -65,22 +78,11 @@ export const getAdminIdVerificationUrl = onCall(
     }
     const adminUid = request.auth.uid;
     const db = getFirestore();
-    await checkActiveStatus(db, adminUid);
-
-    // Verify admin role
-    const adminSnap = await db.collection('users').doc(adminUid).get();
-    if (!adminSnap.exists || adminSnap.data()?.isAdmin !== true) {
-      throw new HttpsError(
-        'permission-denied',
-        'Only administrators can access ID documents for verification.',
-      );
-    }
+    const adminData = await checkActiveStatus(db, adminUid);
+    requireAdminRole(adminData);
 
     const data = (request.data ?? {}) as { userId?: unknown };
-    const userId = data.userId;
-    if (typeof userId !== 'string' || userId.length === 0) {
-      throw new HttpsError('invalid-argument', 'userId is required.');
-    }
+    const userId = validateString(data.userId, 'userId', 1, 100);
 
     const userSnap = await db.collection('users').doc(userId).get();
     if (!userSnap.exists) {
@@ -122,16 +124,8 @@ export const reviewIdVerification = onCall(
     }
     const adminUid = request.auth.uid;
     const db = getFirestore();
-    await checkActiveStatus(db, adminUid);
-
-    // Verify admin role
-    const adminSnap = await db.collection('users').doc(adminUid).get();
-    if (!adminSnap.exists || adminSnap.data()?.isAdmin !== true) {
-      throw new HttpsError(
-        'permission-denied',
-        'Only administrators can review ID verifications.',
-      );
-    }
+    const adminData = await checkActiveStatus(db, adminUid);
+    requireAdminRole(adminData);
 
     const data = (request.data ?? {}) as {
       userId?: unknown;
@@ -139,19 +133,23 @@ export const reviewIdVerification = onCall(
       rejectionReason?: unknown;
     };
 
-    const userId = data.userId;
-    const decision = data.decision;
-    const rejectionReason = data.rejectionReason;
-
-    if (typeof userId !== 'string' || userId.length === 0) {
-      throw new HttpsError('invalid-argument', 'userId is required.');
-    }
-    if (decision !== 'approve' && decision !== 'reject') {
+    const userId = validateString(data.userId, 'userId', 1, 100);
+    if (adminUid === userId) {
       throw new HttpsError(
         'invalid-argument',
-        "decision must be 'approve' or 'reject'.",
+        'Administrators cannot verify their own ID documents.',
       );
     }
+
+    const decision = validateEnum(data.decision, 'decision', [
+      'approve',
+      'reject',
+    ] as const);
+
+    const rejectionReason =
+      decision === 'reject'
+        ? validateString(data.rejectionReason, 'rejectionReason', 5, 500)
+        : undefined;
 
     const bucket = getStorage().bucket();
     const filePath = `users/${userId}/id-image`;
@@ -163,18 +161,6 @@ export const reviewIdVerification = onCall(
         'failed-precondition',
         'Cannot approve ID verification: document does not exist in storage or was deleted.',
       );
-    }
-
-    if (decision === 'reject') {
-      if (
-        typeof rejectionReason !== 'string' ||
-        rejectionReason.trim().length < 5
-      ) {
-        throw new HttpsError(
-          'invalid-argument',
-          'A clear rejection reason (at least 5 characters) is required when rejecting verification.',
-        );
-      }
     }
 
     const userRef = db.collection('users').doc(userId);
@@ -200,7 +186,7 @@ export const reviewIdVerification = onCall(
           idVerificationStatus: 'rejected',
           idVerificationReviewedAt: FieldValue.serverTimestamp(),
           idVerificationReviewedBy: adminUid,
-          idVerificationRejectionReason: (rejectionReason as string).trim(),
+          idVerificationRejectionReason: (rejectionReason ?? '').trim(),
           idVerifiedAt: FieldValue.delete(),
         });
       }
@@ -230,7 +216,7 @@ export const reviewIdVerification = onCall(
             : 'id_verification_rejected',
         reason:
           decision === 'reject'
-            ? (rejectionReason as string).trim()
+            ? (rejectionReason ?? '').trim()
             : 'ID document verified by administrator',
         timestamp: FieldValue.serverTimestamp(),
         metadata: {
@@ -253,7 +239,7 @@ export const reviewIdVerification = onCall(
         description:
           decision === 'approve'
             ? `${adminName} approved ID verification for ${targetName}`
-            : `${adminName} rejected ID verification for ${targetName}: ${(rejectionReason as string).trim()}`,
+            : `${adminName} rejected ID verification for ${targetName}: ${(rejectionReason ?? '').trim()}`,
         userId: adminUid,
       });
     } catch (err) {
@@ -272,7 +258,8 @@ export const submitIdVerification = onCall(
     }
     const uid = request.auth.uid;
     const db = getFirestore();
-    await checkActiveStatus(db, uid);
+    const userData = await checkActiveStatus(db, uid);
+    requireVolunteerRole(userData);
 
     const bucket = getStorage().bucket();
     const filePath = `users/${uid}/id-image`;

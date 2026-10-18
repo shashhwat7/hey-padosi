@@ -7,6 +7,7 @@ import {
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { checkActiveStatus } from './moderation-helper';
 import { appendActivityLog, safeDisplayName } from './activity-log';
+import { validateOptionalString, validateString } from './validation';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -29,27 +30,17 @@ export const reportUser = onCall(
       messageRef?: unknown;
     };
 
-    const reportedUserId = data.reportedUserId;
-    const taskId = data.taskId;
-    const reason = data.reason;
-    const details = data.details ?? '';
+    const reportedUserId = validateString(
+      data.reportedUserId,
+      'reportedUserId',
+      1,
+      100,
+    );
+    const taskId = validateString(data.taskId, 'taskId', 1, 100);
+    const reason = validateString(data.reason, 'reason', 1, 100);
+    const details = validateOptionalString(data.details, 'details', 500) ?? '';
     const messageRef = data.messageRef;
 
-    if (typeof reportedUserId !== 'string' || reportedUserId.length === 0) {
-      throw new HttpsError('invalid-argument', 'reportedUserId is required.');
-    }
-    if (typeof taskId !== 'string' || taskId.length === 0) {
-      throw new HttpsError('invalid-argument', 'taskId is required.');
-    }
-    if (typeof reason !== 'string' || reason.length === 0) {
-      throw new HttpsError('invalid-argument', 'reason is required.');
-    }
-    if (typeof details !== 'string' || details.length > 500) {
-      throw new HttpsError(
-        'invalid-argument',
-        'details must be a string up to 500 characters.',
-      );
-    }
     // Optional message-level report (M7). When present it must point at a
     // message inside this task's chat: chats/{taskId}/messages/{msgId}.
     const expectedMessagePrefix = `chats/${String(taskId)}/messages/`;

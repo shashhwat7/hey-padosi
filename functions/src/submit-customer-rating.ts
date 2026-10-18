@@ -8,6 +8,11 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { checkActiveStatus } from './moderation-helper';
 import { writeAuditEvent } from './audit';
 import { recomputeTrustScore } from './recompute-trust-score';
+import {
+  validateInteger,
+  validateOptionalString,
+  validateString,
+} from './validation';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -27,30 +32,13 @@ export const submitCustomerRating = onCall(
       rating?: unknown;
       comment?: unknown;
     };
-    const taskId = data.taskId;
-    const rating = data.rating;
-    const comment = data.comment;
-    if (typeof taskId !== 'string' || taskId.length === 0) {
-      throw new HttpsError('invalid-argument', 'taskId is required.');
-    }
-    if (
-      typeof rating !== 'number' ||
-      !Number.isInteger(rating) ||
-      rating < 1 ||
-      rating > 5
-    ) {
-      throw new HttpsError('invalid-argument', 'Rating must be 1–5.');
-    }
-    let trimmedComment: string | null = null;
-    if (typeof comment === 'string' && comment.trim().length > 0) {
-      if (comment.length > MAX_COMMENT_LEN) {
-        throw new HttpsError(
-          'invalid-argument',
-          `Comment must be ${String(MAX_COMMENT_LEN)} characters or fewer.`,
-        );
-      }
-      trimmedComment = comment.trim();
-    }
+    const taskId = validateString(data.taskId, 'taskId', 1, 100);
+    const rating = validateInteger(data.rating, 'rating', 1, 5);
+    const trimmedComment = validateOptionalString(
+      data.comment,
+      'comment',
+      MAX_COMMENT_LEN,
+    );
     const callerUid = request.auth.uid;
 
     const db = getFirestore();

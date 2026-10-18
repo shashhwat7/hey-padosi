@@ -8,6 +8,7 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { checkActiveStatus } from './moderation-helper';
 import { appendSystemMessage } from './chat';
 import { recordViolationAndCheckAbuse } from './abuse-detector';
+import { validateEnum, validateString } from './validation';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -39,15 +40,8 @@ export const deleteTask = onCall(
       reason?: unknown;
     };
 
-    const taskId = data.taskId;
-    const reason = data.reason as CustomerDeleteReason;
-
-    if (typeof taskId !== 'string' || taskId.length === 0) {
-      throw new HttpsError('invalid-argument', 'taskId is required.');
-    }
-    if (typeof reason !== 'string' || !VALID_REASONS.includes(reason)) {
-      throw new HttpsError('invalid-argument', 'valid reason is required.');
-    }
+    const taskId = validateString(data.taskId, 'taskId', 1, 100);
+    const reason = validateEnum(data.reason, 'reason', VALID_REASONS);
 
     const customerUid = request.auth.uid;
     const db = getFirestore();

@@ -14,6 +14,7 @@ import { constantTimeEquals, hashOtp, MAX_OTP_ATTEMPTS } from './otp';
 import { appendActivityLog, safeDisplayName } from './activity-log';
 import { appendSystemMessage } from './chat';
 import { logger } from 'firebase-functions/v2';
+import { validateString } from './validation';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -30,12 +31,9 @@ export const verifyEndOtp = onCall(
       taskId?: unknown;
       code?: unknown;
     };
-    const taskId = data.taskId;
-    const code = data.code;
-    if (typeof taskId !== 'string' || taskId.length === 0) {
-      throw new HttpsError('invalid-argument', 'taskId is required.');
-    }
-    if (typeof code !== 'string' || !/^\d{4}$/.test(code)) {
+    const taskId = validateString(data.taskId, 'taskId', 1, 100);
+    const code = validateString(data.code, 'code', 4, 4);
+    if (!/^\d{4}$/.test(code)) {
       throw new HttpsError('invalid-argument', 'Enter the 4-digit code.');
     }
     const callerUid = request.auth.uid;

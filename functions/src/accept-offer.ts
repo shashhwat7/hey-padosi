@@ -16,9 +16,10 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { logger } from 'firebase-functions/v2';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { checkActiveStatus } from './moderation-helper';
+import { checkActiveStatus, requireVolunteerRole } from './moderation-helper';
 import { appendActivityLog, safeDisplayName } from './activity-log';
 import { appendSystemMessage, ensureChatForTask } from './chat';
+import { validateString } from './validation';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -61,14 +62,12 @@ export const acceptOffer = onCall(
     const data = (request.data ?? {}) as {
       taskId?: unknown;
     };
-    const taskId = data.taskId;
-    if (typeof taskId !== 'string' || taskId.length === 0) {
-      throw new HttpsError('invalid-argument', 'taskId is required.');
-    }
+    const taskId = validateString(data.taskId, 'taskId', 1, 100);
     const volunteerId = request.auth.uid;
 
     const db = getFirestore();
-    await checkActiveStatus(db, volunteerId);
+    const userData = await checkActiveStatus(db, volunteerId);
+    requireVolunteerRole(userData);
 
     const taskRef = db.collection('tasks').doc(taskId);
     const offerRef = taskRef.collection('offers').doc(volunteerId);

@@ -4,7 +4,8 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { checkActiveStatus } from './moderation-helper';
+import { checkActiveStatus, requireVolunteerRole } from './moderation-helper';
+import { validateString } from './validation';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -19,14 +20,13 @@ export const rejectOffer = onCall(
       throw new HttpsError('unauthenticated', 'Sign in required.');
     }
     const data = (request.data ?? {}) as { taskId?: unknown };
-    const taskId = data.taskId;
-    if (typeof taskId !== 'string' || taskId.length === 0) {
-      throw new HttpsError('invalid-argument', 'taskId is required.');
-    }
+    const taskId = validateString(data.taskId, 'taskId', 1, 100);
     const volunteerId = request.auth.uid;
 
     const db = getFirestore();
-    await checkActiveStatus(db, volunteerId);
+    const userData = await checkActiveStatus(db, volunteerId);
+    requireVolunteerRole(userData);
+
     const offerRef = db
       .collection('tasks')
       .doc(taskId)

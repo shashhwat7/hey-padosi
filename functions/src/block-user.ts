@@ -3,6 +3,7 @@ import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { checkActiveStatus } from './moderation-helper';
 import { appendActivityLog } from './activity-log';
+import { validateString } from './validation';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -20,10 +21,12 @@ export const blockUser = onCall(
       blockedUserId?: unknown;
     };
 
-    const blockedUserId = data.blockedUserId;
-    if (typeof blockedUserId !== 'string' || blockedUserId.length === 0) {
-      throw new HttpsError('invalid-argument', 'blockedUserId is required.');
-    }
+    const blockedUserId = validateString(
+      data.blockedUserId,
+      'blockedUserId',
+      1,
+      100,
+    );
 
     const callerUid = request.auth.uid;
     if (callerUid === blockedUserId) {
@@ -31,7 +34,17 @@ export const blockUser = onCall(
     }
 
     const db = getFirestore();
-    await checkActiveStatus(db, callerUid);
+    const callerData = await checkActiveStatus(db, callerUid);
+
+    // Verify target user actually exists
+    const targetSnap = await db.collection('users').doc(blockedUserId).get();
+    if (!targetSnap.exists) {
+      throw new HttpsError('not-found', 'Target user does not exist.');
+    }
+    const targetData = (targetSnap.data() ?? {}) as {
+      displayName?: string;
+      photoURL?: string;
+    };
 
     // Deterministic mutual block document ID: userA_userB where userA < userB
     const userA = callerUid < blockedUserId ? callerUid : blockedUserId;
@@ -39,23 +52,11 @@ export const blockUser = onCall(
     const blockId = `${userA}_${userB}`;
 
     const blockRef = db.collection('blocks').doc(blockId);
-
     const blockSnap = await blockRef.get();
+
     if (!blockSnap.exists) {
-      // Denormalise display name + photo for each side so the "Blocked users"
-      // list can render without needing a privileged read on users/{otherUid}.
-      const [userASnap, userBSnap] = await Promise.all([
-        db.collection('users').doc(userA).get(),
-        db.collection('users').doc(userB).get(),
-      ]);
-      const userAData = (userASnap.data() ?? {}) as {
-        displayName?: string;
-        photoURL?: string;
-      };
-      const userBData = (userBSnap.data() ?? {}) as {
-        displayName?: string;
-        photoURL?: string;
-      };
+      const userAData = callerUid === userA ? callerData : targetData;
+      const userBData = callerUid === userB ? callerData : targetData;
 
       await blockRef.set({
         userA,
@@ -68,9 +69,7 @@ export const blockUser = onCall(
         createdAt: FieldValue.serverTimestamp(),
       });
 
-      // Activity log only on actual new block. Names come from the
-      // snapshots we just wrote — no UID leakage. Skip if a duplicate
-      // block is being re-submitted (the `if (!blockSnap.exists)` gate).
+      // Activity log only on actual new block
       const initiatorName =
         (callerUid === userA
           ? userAData.displayName

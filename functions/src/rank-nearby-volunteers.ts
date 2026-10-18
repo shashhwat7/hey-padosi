@@ -6,6 +6,8 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { rankForTask, type RankedVolunteer, type TaskDoc } from './scoring';
+import { checkActiveStatus } from './moderation-helper';
+import { validateString } from './validation';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -27,12 +29,11 @@ export const rankNearbyVolunteers = onCall(
       throw new HttpsError('unauthenticated', 'Sign in required.');
     }
     const data = (request.data ?? {}) as { taskId?: unknown };
-    const taskId = data.taskId;
-    if (typeof taskId !== 'string' || taskId.length === 0) {
-      throw new HttpsError('invalid-argument', 'taskId is required.');
-    }
+    const taskId = validateString(data.taskId, 'taskId', 1, 100);
 
     const db = getFirestore();
+    await checkActiveStatus(db, request.auth.uid);
+
     const taskSnap = await db.collection('tasks').doc(taskId).get();
     if (!taskSnap.exists) {
       throw new HttpsError('not-found', 'Task not found.');

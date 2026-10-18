@@ -8,6 +8,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { checkActiveStatus } from './moderation-helper';
 import { appendActivityLog, safeDisplayName } from './activity-log';
+import { validateString } from './validation';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -23,12 +24,18 @@ export const unblockUser = onCall(
     }
 
     const data = (request.data ?? {}) as { blockedUserId?: unknown };
-    const blockedUserId = data.blockedUserId;
-    if (typeof blockedUserId !== 'string' || blockedUserId.length === 0) {
-      throw new HttpsError('invalid-argument', 'blockedUserId is required.');
-    }
+    const blockedUserId = validateString(
+      data.blockedUserId,
+      'blockedUserId',
+      1,
+      100,
+    );
 
     const callerUid = request.auth.uid;
+    if (callerUid === blockedUserId) {
+      throw new HttpsError('invalid-argument', 'You cannot unblock yourself.');
+    }
+
     const db = getFirestore();
 
     await checkActiveStatus(db, callerUid);
