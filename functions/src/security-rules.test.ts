@@ -217,7 +217,7 @@ test('Tasks Security: client direct update and delete of tasks are strictly DENI
   await assertFails(deleteDoc(doc(customerDb, 'tasks/task-102')));
 });
 
-test('Tasks Security: read access allowed only to customer, assigned volunteer, or admin', async () => {
+test('Tasks Security: read access allowed only to customer, assigned volunteer, or admin on active tasks', async () => {
   await testEnv.withSecurityRulesDisabled(async (adminContext) => {
     const db = adminContext.firestore();
     await setDoc(doc(db, 'users/admin-1'), { isAdmin: true });
@@ -239,6 +239,47 @@ test('Tasks Security: read access allowed only to customer, assigned volunteer, 
   await assertSucceeds(getDoc(doc(assignedVolDb, 'tasks/task-assigned')));
   await assertSucceeds(getDoc(doc(adminDb, 'tasks/task-assigned')));
   await assertFails(getDoc(doc(strangerDb, 'tasks/task-assigned')));
+});
+
+test('Tasks Security: authenticated active volunteer can read open searching tasks, but customer-only or stranger on active task is denied', async () => {
+  await testEnv.withSecurityRulesDisabled(async (adminContext) => {
+    const db = adminContext.firestore();
+    await setDoc(doc(db, 'users/vol-reader'), {
+      accountStatus: 'active',
+      roles: ['volunteer'],
+    });
+    await setDoc(doc(db, 'users/customer-only'), {
+      accountStatus: 'active',
+      roles: ['customer'],
+    });
+    await setDoc(doc(db, 'users/vol-suspended'), {
+      accountStatus: 'suspended',
+      suspendedUntil: new Date(Date.now() + 86400 * 1000),
+      roles: ['volunteer'],
+    });
+    await setDoc(doc(db, 'tasks/task-open-searching'), {
+      customerId: 'other-customer',
+      title: 'Open grocery run',
+      status: 'searching',
+    });
+  });
+
+  const volDb = testEnv.authenticatedContext('vol-reader').firestore();
+  const custDb = testEnv.authenticatedContext('customer-only').firestore();
+  const suspendedVolDb = testEnv.authenticatedContext('vol-suspended').firestore();
+  const unauthedDb = testEnv.unauthenticatedContext().firestore();
+
+  // Active volunteer can read open searching task
+  await assertSucceeds(getDoc(doc(volDb, 'tasks/task-open-searching')));
+
+  // Customer-only user without volunteer role is denied
+  await assertFails(getDoc(doc(custDb, 'tasks/task-open-searching')));
+
+  // Suspended volunteer is denied
+  await assertFails(getDoc(doc(suspendedVolDb, 'tasks/task-open-searching')));
+
+  // Unauthenticated caller is denied
+  await assertFails(getDoc(doc(unauthedDb, 'tasks/task-open-searching')));
 });
 
 test('Tasks Security: suspended or banned user cannot create or read active tasks', async () => {

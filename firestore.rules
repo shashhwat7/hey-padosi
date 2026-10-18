@@ -27,6 +27,12 @@ service cloud.firestore {
         || ('accountStatus' in get(path).data.keys() && get(path).data.accountStatus == 'suspended' && 'suspendedUntil' in get(path).data.keys() && get(path).data.suspendedUntil > request.time)
       );
     }
+    function isVolunteer() {
+      let path = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(path)
+        && 'roles' in get(path).data.keys()
+        && get(path).data.roles.hasAny(['volunteer']);
+    }
 
     // Fields a client may set on their initial users/{uid} document.
     function userCreateAllowedKeys() {
@@ -70,6 +76,12 @@ service cloud.firestore {
     function userServerOnlyKeys() {
       return [
         'idVerified',
+        'idVerificationStatus',
+        'idVerificationSubmittedAt',
+        'idVerificationReviewedAt',
+        'idVerificationReviewedBy',
+        'idVerificationRejectionReason',
+        'idVerifiedAt',
         'trustScore',
         'verifiedTaskCount',
         'verifiedHours',
@@ -183,12 +195,14 @@ service cloud.firestore {
       //   - the task's customer always
       //   - the accepted volunteer (after they accept)
       //   - administrators
+      //   - active, authenticated volunteers for open searching tasks
       // Restricted: suspended/banned users cannot read active task assignments.
       allow read: if isSignedIn() && (
         isAdmin() || (
           !isSuspendedOrBanned(request.auth.uid) && (
             request.auth.uid == resource.data.customerId
             || request.auth.uid == resource.data.acceptedVolunteerId
+            || (resource.data.status == 'searching' && isVolunteer())
           )
         )
       );

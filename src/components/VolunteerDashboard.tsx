@@ -30,7 +30,7 @@ import {
   type Timestamp,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { getDownloadURL, ref as storageRef } from 'firebase/storage';
+import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
 import { latLngToCell } from 'h3-js';
 import { Link, useNavigate } from 'react-router-dom';
 import { auth, db, functions, storage } from '../lib/firebase';
@@ -1419,6 +1419,52 @@ function VolunteerProfileScreen({
   const [emailError, setEmailError] = useState<string | null>(null);
   const [emailSubmitting, setEmailSubmitting] = useState(false);
 
+  // ID Upload Modal state
+  const [idModalOpen, setIdModalOpen] = useState(false);
+  const [idFile, setIdFile] = useState<File | null>(null);
+  const [idError, setIdError] = useState<string | null>(null);
+  const [idSubmitting, setIdSubmitting] = useState(false);
+  const [idSuccess, setIdSuccess] = useState<string | null>(null);
+
+  async function handleUploadId() {
+    if (!idFile) {
+      setIdError('Please select a valid ID document image.');
+      return;
+    }
+    if (idFile.size > 2 * 1024 * 1024) {
+      setIdError('File must be 2 MB or smaller.');
+      return;
+    }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(idFile.type)) {
+      setIdError('Please select a valid JPEG, PNG, or WebP image.');
+      return;
+    }
+
+    setIdSubmitting(true);
+    setIdError(null);
+    try {
+      const idPath = `users/${uid}/id-image`;
+      await uploadBytes(storageRef(storage(), idPath), idFile, {
+        contentType: idFile.type,
+      });
+      await updateDoc(doc(db(), 'users', uid), {
+        idImagePath: idPath,
+      });
+      const submitFn = httpsCallable(functions(), 'submitIdVerification');
+      await submitFn();
+      setIdSuccess('ID document submitted successfully for admin review.');
+      setIdFile(null);
+      setTimeout(() => {
+        setIdSuccess(null);
+        setIdModalOpen(false);
+      }, 2000);
+    } catch (err) {
+      setIdError(err instanceof Error ? err.message : 'Failed to upload ID document.');
+    } finally {
+      setIdSubmitting(false);
+    }
+  }
+
   function handleSendPhoneOtp() {
     setPhoneError(null);
     const cleaned = phoneInput.trim();
@@ -1572,6 +1618,42 @@ function VolunteerProfileScreen({
                     </svg>
                     <span>ID Verified</span>
                   </span>
+                ) : userDoc.idVerificationStatus === 'pending' || (userDoc.idImagePath && userDoc.idVerificationStatus !== 'rejected') ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/25 border border-amber-300/40 px-2.5 py-0.5 text-xs font-semibold text-amber-100">
+                    <svg
+                      className="h-3 w-3 shrink-0"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      aria-hidden="true"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                    <span>ID Pending Review</span>
+                  </span>
+                ) : userDoc.idVerificationStatus === 'rejected' ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/25 border border-rose-300/40 px-2.5 py-0.5 text-xs font-semibold text-rose-100">
+                    <svg
+                      className="h-3 w-3 shrink-0"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      aria-hidden="true"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                    <span>ID Rejected</span>
+                  </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2.5 py-0.5 text-xs font-medium text-white/90">
                     <svg
@@ -1704,7 +1786,38 @@ function VolunteerProfileScreen({
                 }
                 label="ID Verification"
                 value={
-                  userDoc.idImagePath ? 'ID Uploaded & Verified' : 'Optional'
+                  userDoc.idVerified ? (
+                    <span className="font-semibold text-emerald-700">Verified by Administrator</span>
+                  ) : userDoc.idVerificationStatus === 'pending' ||
+                    (userDoc.idImagePath && userDoc.idVerificationStatus !== 'rejected') ? (
+                    <span className="font-semibold text-amber-700">Pending Admin Review</span>
+                  ) : userDoc.idVerificationStatus === 'rejected' ? (
+                    <span className="font-semibold text-rose-700">
+                      Rejected{userDoc.idVerificationRejectionReason ? `: ${userDoc.idVerificationRejectionReason}` : ''}
+                    </span>
+                  ) : (
+                    'Not Submitted (Optional)'
+                  )
+                }
+                action={
+                  !userDoc.idVerified ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIdFile(null);
+                        setIdError(null);
+                        setIdSuccess(null);
+                        setIdModalOpen(true);
+                      }}
+                      className="rounded-xl border border-[#ececea] bg-[#fafaf8] px-3.5 py-1.5 text-xs font-bold text-[#1f6f5c] transition hover:bg-[#e3efe9]"
+                    >
+                      {userDoc.idVerificationStatus === 'rejected'
+                        ? 'Re-upload ID'
+                        : userDoc.idImagePath
+                        ? 'Update ID'
+                        : 'Upload ID'}
+                    </button>
+                  ) : undefined
                 }
               />
             </div>
@@ -2213,6 +2326,104 @@ function VolunteerProfileScreen({
           document.body,
         )}
 
+      {/* Upload ID Modal */}
+      {idModalOpen &&
+        createPortal(
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-[#131312]/60 p-4 backdrop-blur-xs vc-fade-up">
+            <div className="w-full max-w-md overflow-hidden rounded-[24px] border border-[#ececea] bg-white p-6 shadow-xl sm:p-7">
+              <div className="flex items-center justify-between border-b border-[#ececea] pb-4">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#e3efe9] text-[#1f6f5c]">
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="h-4 w-4"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                    </svg>
+                  </span>
+                  <h3 className="m-0 text-lg font-bold text-[#131312]">
+                    Community ID Verification
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIdModalOpen(false)}
+                  className="rounded-full p-1 text-[#8a847d] hover:bg-[#fafaf8]"
+                  aria-label="Close"
+                >
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                <p className="text-xs leading-relaxed text-[#4f4b46]">
+                  Upload a clear image of your institutional, community, or student ID card (JPEG, PNG, WebP ≤ 2 MB).
+                  Your document is kept strictly confidential and only inspected by platform administrators to unlock medium-risk tasks.
+                </p>
+
+                {userDoc.idVerificationStatus === 'rejected' && userDoc.idVerificationRejectionReason && (
+                  <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+                    <strong>Previous review reason:</strong> {userDoc.idVerificationRejectionReason}
+                  </div>
+                )}
+
+                <div>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={(e) => {
+                      setIdError(null);
+                      const file = e.target.files?.[0] ?? null;
+                      setIdFile(file);
+                    }}
+                    className="block w-full text-xs text-[#4f4b46] file:mr-3 file:rounded-full file:border-0 file:bg-[#1f6f5c] file:px-4 file:py-2 file:text-xs file:font-bold file:text-white hover:file:bg-[#175849]"
+                  />
+                  {idFile && (
+                    <div className="mt-2 text-xs font-medium text-[#1f6f5c]">
+                      Selected: {idFile.name} ({(idFile.size / 1024).toFixed(1)} KB)
+                    </div>
+                  )}
+                </div>
+
+                {idError && (
+                  <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+                    {idError}
+                  </div>
+                )}
+                {idSuccess && (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
+                    {idSuccess}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIdModalOpen(false)}
+                    className="rounded-full border border-[#ececea] bg-white px-4 py-2 text-xs font-semibold text-[#4f4b46] hover:bg-[#fafaf8]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!idFile || idSubmitting}
+                    onClick={() => void handleUploadId()}
+                    className="rounded-full bg-[#1f6f5c] px-5 py-2 text-xs font-bold text-white shadow-xs transition hover:bg-[#175849] disabled:opacity-50"
+                  >
+                    {idSubmitting ? 'Uploading…' : 'Submit for Review'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
       <HowTrustWorksModal
         isOpen={isTrustModalOpen}
         onClose={() => setIsTrustModalOpen(false)}
@@ -2362,7 +2573,7 @@ function DetailRow({
 }: {
   icon: React.ReactNode;
   label: string;
-  value: string;
+  value: React.ReactNode;
   action?: React.ReactNode;
 }) {
   return (

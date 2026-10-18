@@ -21,6 +21,7 @@ import {
   WAIT_TIER_CONFIG,
   type WaitTier,
 } from './nudge-copy-bank';
+import { writeAuditEvent } from './audit';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -52,6 +53,26 @@ export interface NudgeUpdateResult {
   nextNudgeStage?: 1 | 2 | 3;
   statusMessage?: string;
   nearingExpiry?: boolean;
+}
+
+export function evaluateTaskExpiryPure(
+  task: {
+    status?: string | undefined;
+    expiresAt?: { toMillis(): number } | number | null | undefined;
+  },
+  nowMs: number,
+): { isExpired: boolean; shouldTransition: boolean } {
+  if (task.status !== 'searching') {
+    return { isExpired: false, shouldTransition: false };
+  }
+  const expiresAtMs =
+    typeof task.expiresAt === 'number'
+      ? task.expiresAt
+      : task.expiresAt?.toMillis?.();
+  if (typeof expiresAtMs === 'number' && nowMs >= expiresAtMs) {
+    return { isExpired: true, shouldTransition: true };
+  }
+  return { isExpired: false, shouldTransition: false };
 }
 
 export function computeNudgeUpdate(
@@ -191,6 +212,57 @@ export const periodicRedispatchOffers = onSchedule(
 
     for (const taskDoc of taskDocs) {
       const task = taskDoc.data() as SearchingTask;
+
+      // 1. Task expiry check: transition to 'expired' if now >= expiresAt
+      const expiryCheck = evaluateTaskExpiryPure(task, now);
+      if (expiryCheck.shouldTransition) {
+        let transitioned = false;
+        await db.runTransaction(async (tx) => {
+          const snap = await tx.get(taskDoc.ref);
+          if (!snap.exists) return;
+          const current = snap.data() as SearchingTask;
+          if (current.status !== 'searching') return;
+          tx.update(taskDoc.ref, {
+            status: 'expired',
+            expiredAt: FieldValue.serverTimestamp(),
+            statusMessage: 'Task expired without an assigned volunteer.',
+            nextCheckAt: FieldValue.delete(),
+          });
+          transitioned = true;
+        });
+
+        if (transitioned) {
+          try {
+            const openOffersSnap = await taskDoc.ref
+              .collection('offers')
+              .where('state', '==', 'offered')
+              .get();
+            if (!openOffersSnap.empty) {
+              const batch = db.batch();
+              for (const oDoc of openOffersSnap.docs) {
+                batch.update(oDoc.ref, {
+                  state: 'expired',
+                  respondedAt: FieldValue.serverTimestamp(),
+                });
+              }
+              await batch.commit();
+            }
+          } catch (err) {
+            logger.warn(`Failed to expire sibling offers for task ${taskDoc.id}`, { error: err });
+          }
+
+          try {
+            await writeAuditEvent(taskDoc.id, 'expired', 'system', {
+              reason: '24h window elapsed without volunteer match',
+            });
+          } catch (err) {
+            logger.warn(`Failed to write expiry audit event for task ${taskDoc.id}`, { error: err });
+          }
+        }
+        processed++;
+        continue;
+      }
+
       const createdAtMs = task.createdAt?.toMillis();
       if (
         typeof createdAtMs === 'number' &&
@@ -218,8 +290,18 @@ export const periodicRedispatchOffers = onSchedule(
 
       const offersSnap = await taskDoc.ref.collection('offers').get();
       const alreadyOffered = new Set(offersSnap.docs.map((d) => d.id));
+      if (Array.isArray(task.cancelledVolunteerIds)) {
+        for (const uid of task.cancelledVolunteerIds) {
+          if (typeof uid === 'string' && uid.length > 0) {
+            alreadyOffered.add(uid);
+          }
+        }
+      }
 
-      const ranked = await rankForTask({ ...task, searchRadiusM: nextRadius });
+      const ranked = await rankForTask(
+        { ...task, searchRadiusM: nextRadius },
+        alreadyOffered,
+      );
       const newCandidates = ranked
         .filter((r) => !alreadyOffered.has(r.uid))
         .slice(0, MAX_NEW_OFFERS_PER_TASK);

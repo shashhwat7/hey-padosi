@@ -67,7 +67,7 @@ interface ModerationLogEntry {
   timestamp: Timestamp;
 }
 
-type AdminTab = 'reports' | 'users' | 'tasks' | 'activity';
+type AdminTab = 'reports' | 'verifications' | 'users' | 'tasks' | 'activity';
 
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<AdminTab>('reports');
@@ -77,6 +77,7 @@ export default function AdminDashboard() {
     totalUsers: 0,
     completedTasks: 0,
     openReports: 0,
+    pendingVerifications: 0,
   });
   const [statsLoading, setStatsLoading] = useState(true);
 
@@ -91,10 +92,15 @@ export default function AdminDashboard() {
       collection(db(), 'reports'),
       where('status', '==', 'pending'),
     );
+    const pendingVerificationsQ = query(
+      collection(db(), 'users'),
+      where('idVerificationStatus', '==', 'pending'),
+    );
 
     let unsubUsers = () => {};
     let unsubTasks = () => {};
     let unsubReports = () => {};
+    let unsubVerifications = () => {};
 
     try {
       unsubUsers = onSnapshot(usersQ, (snap) => {
@@ -107,6 +113,9 @@ export default function AdminDashboard() {
         setStats((prev) => ({ ...prev, openReports: snap.size }));
         setStatsLoading(false);
       });
+      unsubVerifications = onSnapshot(pendingVerificationsQ, (snap) => {
+        setStats((prev) => ({ ...prev, pendingVerifications: snap.size }));
+      });
     } catch (err) {
       console.error('Error fetching admin stats:', err);
       setTimeout(() => setStatsLoading(false), 0);
@@ -116,6 +125,7 @@ export default function AdminDashboard() {
       unsubUsers();
       unsubTasks();
       unsubReports();
+      unsubVerifications();
     };
   }, []);
 
@@ -244,9 +254,50 @@ export default function AdminDashboard() {
               <span className="text-xs text-[#4f4b46]">members</span>
             </div>
             <p className="mt-2 text-xs text-[#8a847d]">
-              Verified requesters and volunteers in neighbourhood network.
+              Civic volunteers and neighbours connected.
             </p>
           </div>
+
+          {/* Pending ID Verifications Card */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('verifications')}
+            className={
+              'text-left w-full cursor-pointer rounded-3xl border p-6 transition shadow-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1f6f5c] ' +
+              (stats.pendingVerifications > 0
+                ? 'border-emerald-300 bg-[#f0fdf4] hover:border-emerald-400'
+                : 'border-[#ececea] bg-white hover:border-[#1f6f5c]/40')
+            }
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#8a847d]">
+                ID Verifications
+              </span>
+              {stats.pendingVerifications > 0 ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-200/80 px-2.5 py-0.5 text-[11px] font-bold text-emerald-900">
+                  <span className="h-2 w-2 rounded-full bg-emerald-600 animate-pulse" />
+                  Review Needed
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full bg-[#f3f1ec] px-2.5 py-0.5 text-[11px] font-bold text-[#4f4b46]">
+                  ✓ All Clear
+                </span>
+              )}
+            </div>
+            <div className="mt-3 flex items-baseline gap-2">
+              <span className="font-mono text-3xl font-bold tracking-tight text-[#131312]">
+                {statsLoading ? '…' : stats.pendingVerifications}
+              </span>
+              <span className="text-xs text-[#4f4b46]">
+                {stats.pendingVerifications === 1 ? 'pending review' : 'pending reviews'}
+              </span>
+            </div>
+            <p className="mt-2 text-xs text-[#8a847d]">
+              {stats.pendingVerifications > 0
+                ? 'Volunteer community IDs awaiting review to unlock medium-risk tasks.'
+                : 'Zero pending ID verification requests.'}
+            </p>
+          </button>
         </section>
 
         {/* Tab Navigation */}
@@ -265,6 +316,24 @@ export default function AdminDashboard() {
             {stats.openReports > 0 && (
               <span className="rounded-full bg-amber-500 px-1.5 py-0.2 text-[10px] font-bold text-white">
                 {stats.openReports}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('verifications')}
+            className={
+              'inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-xs font-bold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1f6f5c] ' +
+              (activeTab === 'verifications'
+                ? 'bg-[#131312] text-white shadow-xs'
+                : 'bg-white border border-[#ececea] text-[#4f4b46] hover:bg-[#fafaf8]')
+            }
+          >
+            <span>ID Verifications</span>
+            {stats.pendingVerifications > 0 && (
+              <span className="rounded-full bg-emerald-600 px-1.5 py-0.2 text-[10px] font-bold text-white">
+                {stats.pendingVerifications}
               </span>
             )}
           </button>
@@ -312,6 +381,7 @@ export default function AdminDashboard() {
         {/* Tab Panels */}
         <div className="mt-6">
           {activeTab === 'reports' && <PendingReportsPanel />}
+          {activeTab === 'verifications' && <IdVerificationsPanel />}
           {activeTab === 'users' && <UserLookupPanel />}
           {activeTab === 'tasks' && <TaskAuditPanel />}
           {activeTab === 'activity' && <ActivityLogPanel />}
@@ -2008,3 +2078,558 @@ function ActivityLogPanel() {
     </div>
   );
 }
+
+/* ============================================================================
+   ID VERIFICATIONS PANEL
+   ============================================================================ */
+interface VerificationUserRow {
+  uid: string;
+  displayName?: string;
+  photoURL?: string;
+  phoneNumber?: string;
+  email?: string;
+  roles?: string[];
+  idImagePath?: string;
+  idVerified?: boolean;
+  idVerificationStatus?: 'pending' | 'verified' | 'rejected';
+  idVerificationSubmittedAt?: Timestamp;
+  idVerificationReviewedAt?: Timestamp;
+  idVerificationReviewedBy?: string;
+  idVerificationRejectionReason?: string;
+  trustScore?: number;
+  createdAt?: Timestamp;
+}
+
+function IdVerificationsPanel() {
+  const [subTab, setSubTab] = useState<'pending' | 'reviewed'>('pending');
+  const [users, setUsers] = useState<VerificationUserRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Document Inspection modal
+  const [inspectUser, setInspectUser] = useState<VerificationUserRow | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  // Rejection modal
+  const [rejectUser, setRejectUser] = useState<VerificationUserRow | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [rejectionPreset, setRejectionPreset] = useState('blurry');
+  const [submittingDecision, setSubmittingDecision] = useState(false);
+
+  useEffect(() => {
+    if (!actionSuccess) return;
+    const id = setTimeout(() => setActionSuccess(null), AUTO_DISMISS_MS);
+    return () => clearTimeout(id);
+  }, [actionSuccess]);
+
+  useEffect(() => {
+    if (!error) return;
+    const id = setTimeout(() => setError(null), AUTO_DISMISS_MS);
+    return () => clearTimeout(id);
+  }, [error]);
+
+  useEffect(() => {
+    const usersQ = query(collection(db(), 'users'));
+    const unsub = onSnapshot(
+      usersQ,
+      (snap) => {
+        const all: VerificationUserRow[] = snap.docs.map((d) => ({
+          uid: d.id,
+          ...(d.data() as Omit<VerificationUserRow, 'uid'>),
+        }));
+        const withId = all.filter(
+          (u) =>
+            Boolean(u.idImagePath) ||
+            u.idVerificationStatus === 'pending' ||
+            u.idVerificationStatus === 'verified' ||
+            u.idVerificationStatus === 'rejected',
+        );
+        setUsers(withId);
+        setLoading(false);
+      },
+      (err) => {
+        setError('Error loading verification requests: ' + err.message);
+        setLoading(false);
+      },
+    );
+    return unsub;
+  }, []);
+
+  const pendingList = useMemo(
+    () =>
+      users.filter(
+        (u) =>
+          u.idVerificationStatus === 'pending' ||
+          (Boolean(u.idImagePath) && !u.idVerified && u.idVerificationStatus !== 'rejected'),
+      ),
+    [users],
+  );
+
+  const reviewedList = useMemo(
+    () =>
+      users.filter(
+        (u) =>
+          u.idVerified === true ||
+          u.idVerificationStatus === 'verified' ||
+          u.idVerificationStatus === 'rejected',
+      ),
+    [users],
+  );
+
+  async function handleInspect(user: VerificationUserRow) {
+    setInspectUser(user);
+    setPreviewUrl(null);
+    setPreviewError(null);
+    setPreviewLoading(true);
+    try {
+      const getUrlFn = httpsCallable<{ userId: string }, { url: string; expiresAtMs: number }>(
+        functions(),
+        'getAdminIdVerificationUrl',
+      );
+      const res = await getUrlFn({ userId: user.uid });
+      setPreviewUrl(res.data.url);
+    } catch (err: unknown) {
+      setPreviewError(
+        err instanceof Error ? err.message : 'Could not load ID document preview. File may be deleted or inaccessible.',
+      );
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function handleApprove(userId: string, userName: string) {
+    setSubmittingDecision(true);
+    setError(null);
+    try {
+      const reviewFn = httpsCallable<{ userId: string; decision: 'approve' }, { success: boolean }>(
+        functions(),
+        'reviewIdVerification',
+      );
+      await reviewFn({ userId, decision: 'approve' });
+      setActionSuccess(`ID verification approved for ${userName}. User is now eligible for medium-risk tasks.`);
+      if (inspectUser?.uid === userId) {
+        setInspectUser(null);
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to approve ID verification.');
+    } finally {
+      setSubmittingDecision(false);
+    }
+  }
+
+  async function handleReject() {
+    if (!rejectUser) return;
+    const finalReason =
+      rejectionPreset === 'custom'
+        ? rejectionReason.trim()
+        : rejectionReason.trim() ||
+          (rejectionPreset === 'blurry'
+            ? 'Document image is illegible or too low resolution.'
+            : rejectionPreset === 'expired'
+            ? 'Document expired or not an accepted institutional ID.'
+            : rejectionPreset === 'mismatch'
+            ? 'Name on document does not match profile name.'
+            : 'Document does not meet verification requirements.');
+
+    if (finalReason.length < 5) {
+      setError('Please provide a specific rejection reason of at least 5 characters.');
+      return;
+    }
+
+    setSubmittingDecision(true);
+    setError(null);
+    try {
+      const reviewFn = httpsCallable<
+        { userId: string; decision: 'reject'; rejectionReason: string },
+        { success: boolean }
+      >(functions(), 'reviewIdVerification');
+      await reviewFn({
+        userId: rejectUser.uid,
+        decision: 'reject',
+        rejectionReason: finalReason,
+      });
+      setActionSuccess(`ID verification rejected for ${rejectUser.displayName || 'Volunteer'}.`);
+      setRejectUser(null);
+      setRejectionReason('');
+      if (inspectUser?.uid === rejectUser.uid) {
+        setInspectUser(null);
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to reject ID verification.');
+    } finally {
+      setSubmittingDecision(false);
+    }
+  }
+
+  const currentList = subTab === 'pending' ? pendingList : reviewedList;
+
+  return (
+    <div className="space-y-6">
+      {/* Feedback Alerts */}
+      {actionSuccess && (
+        <div className="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-xs font-semibold text-emerald-900 shadow-xs">
+          ✓ {actionSuccess}
+        </div>
+      )}
+      {error && (
+        <div className="rounded-2xl border border-rose-300 bg-rose-50 p-4 text-xs font-semibold text-rose-900 shadow-xs">
+          ⚠ {error}
+        </div>
+      )}
+
+      {/* Sub-Tabs */}
+      <div className="flex items-center justify-between border-b border-[#ececea] pb-3">
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setSubTab('pending')}
+            className={
+              'rounded-full px-4 py-2 text-xs font-bold transition ' +
+              (subTab === 'pending'
+                ? 'bg-[#1f6f5c] text-white shadow-xs'
+                : 'bg-white border border-[#ececea] text-[#4f4b46] hover:bg-[#fafaf8]')
+            }
+          >
+            Pending Reviews ({pendingList.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setSubTab('reviewed')}
+            className={
+              'rounded-full px-4 py-2 text-xs font-bold transition ' +
+              (subTab === 'reviewed'
+                ? 'bg-[#1f6f5c] text-white shadow-xs'
+                : 'bg-white border border-[#ececea] text-[#4f4b46] hover:bg-[#fafaf8]')
+            }
+          >
+            Reviewed History ({reviewedList.length})
+          </button>
+        </div>
+        <span className="text-xs text-[#8a847d]">
+          Manual identity review unlocks medium-risk task matching.
+        </span>
+      </div>
+
+      {loading ? (
+        <div className="py-12 text-center text-xs text-[#8a847d]">
+          Loading verification requests…
+        </div>
+      ) : currentList.length === 0 ? (
+        <div className="rounded-3xl border border-[#ececea] bg-white py-12 text-center shadow-xs">
+          <p className="text-sm font-bold text-[#131312]">
+            {subTab === 'pending'
+              ? 'No pending ID verifications'
+              : 'No reviewed verifications found'}
+          </p>
+          <p className="mt-1 text-xs text-[#8a847d]">
+            {subTab === 'pending'
+              ? 'All volunteer identity submissions have been reviewed.'
+              : 'Decisions made by administrators will appear here.'}
+          </p>
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-3xl border border-[#ececea] bg-white shadow-xs">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="border-b border-[#ececea] bg-[#fafaf8] text-[11px] font-bold uppercase tracking-[0.08em] text-[#8a847d]">
+                <tr>
+                  <th className="px-6 py-4">Volunteer</th>
+                  <th className="px-6 py-4">Contact</th>
+                  <th className="px-6 py-4">Status</th>
+                  <th className="px-6 py-4">Submitted</th>
+                  <th className="px-6 py-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#ececea]">
+                {currentList.map((u) => {
+                  const isVerified = u.idVerified === true || u.idVerificationStatus === 'verified';
+                  const isRejected = u.idVerificationStatus === 'rejected';
+                  const isPending = !isVerified && !isRejected;
+
+                  return (
+                    <tr key={u.uid} className="hover:bg-[#fafaf8]/60 transition">
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#e3efe9] text-sm font-bold text-[#1f6f5c]">
+                            {u.displayName?.[0]?.toUpperCase() ?? 'V'}
+                          </div>
+                          <div>
+                            <div className="font-bold text-[#131312]">
+                              {u.displayName ?? 'Volunteer'}
+                            </div>
+                            <div className="font-mono text-[10px] text-[#8a847d]">
+                              {u.uid}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-[#131312]">
+                          {u.email ?? u.phoneNumber ?? 'No contact'}
+                        </div>
+                        <div className="text-[10px] text-[#8a847d]">
+                          Roles: {u.roles?.join(', ') ?? 'volunteer'}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        {isVerified ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-bold text-emerald-800">
+                            ✓ Verified
+                          </span>
+                        ) : isRejected ? (
+                          <div>
+                            <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2.5 py-0.5 text-[11px] font-bold text-rose-800">
+                              ✕ Rejected
+                            </span>
+                            {u.idVerificationRejectionReason && (
+                              <div className="mt-1 text-[10px] text-rose-700 max-w-xs truncate">
+                                Reason: {u.idVerificationRejectionReason}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-bold text-amber-800">
+                            ⏱ Pending Review
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-[#8a847d]">
+                        {u.idVerificationSubmittedAt
+                          ? u.idVerificationSubmittedAt.toDate().toLocaleDateString()
+                          : u.createdAt
+                          ? u.createdAt.toDate().toLocaleDateString()
+                          : '—'}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void handleInspect(u)}
+                            className="rounded-full border border-[#ececea] bg-white px-3 py-1.5 text-xs font-bold text-[#1f6f5c] hover:bg-[#e3efe9] transition"
+                          >
+                            Inspect ID
+                          </button>
+                          {isPending && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={submittingDecision}
+                                onClick={() => void handleApprove(u.uid, u.displayName ?? 'Volunteer')}
+                                className="rounded-full bg-[#1f6f5c] px-3 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-[#185845] transition disabled:opacity-50"
+                              >
+                                Approve
+                              </button>
+                              <button
+                                type="button"
+                                disabled={submittingDecision}
+                                onClick={() => {
+                                  setRejectUser(u);
+                                  setRejectionReason('');
+                                  setRejectionPreset('blurry');
+                                }}
+                                className="rounded-full border border-rose-300 bg-white px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-50 transition disabled:opacity-50"
+                              >
+                                Reject
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Document Inspection Modal */}
+      {inspectUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#131312]/60 p-4 backdrop-blur-xs vc-fade-up">
+          <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-[#ececea] bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[#ececea] px-6 py-4">
+              <div>
+                <h3 className="m-0 text-base font-bold text-[#131312]">
+                  Inspect Community ID Document
+                </h3>
+                <p className="text-xs text-[#8a847d]">
+                  Volunteer: {inspectUser.displayName ?? 'Volunteer'} ({inspectUser.uid})
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectUser(null)}
+                className="rounded-full p-1 text-[#8a847d] hover:bg-[#fafaf8]"
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-6">
+              {previewLoading ? (
+                <div className="py-20 text-center text-xs text-[#8a847d]">
+                  Generating secure, temporary inspection token…
+                </div>
+              ) : previewError ? (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center text-xs text-rose-800">
+                  <p className="font-bold">Cannot inspect document</p>
+                  <p className="mt-1">{previewError}</p>
+                </div>
+              ) : previewUrl ? (
+                <div className="space-y-4">
+                  <div className="flex max-h-96 items-center justify-center overflow-hidden rounded-2xl border border-[#ececea] bg-[#fafaf8] p-2">
+                    <img
+                      src={previewUrl}
+                      alt="Volunteer Community ID"
+                      className="max-h-80 w-auto object-contain rounded-xl shadow-xs"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-[#8a847d]">
+                    <span>Secure temporary access URL (expires in 15 min). Never exposed publicly.</span>
+                    <a
+                      href={previewUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-bold text-[#1f6f5c] hover:underline"
+                    >
+                      Open full resolution ↗
+                    </a>
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Action Buttons in Modal */}
+              <div className="mt-6 flex items-center justify-between border-t border-[#ececea] pt-4">
+                <button
+                  type="button"
+                  onClick={() => setInspectUser(null)}
+                  className="rounded-full border border-[#ececea] bg-white px-4 py-2 text-xs font-semibold text-[#4f4b46] hover:bg-[#fafaf8]"
+                >
+                  Close
+                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={submittingDecision || !previewUrl}
+                    onClick={() => {
+                      setRejectUser(inspectUser);
+                      setRejectionReason('');
+                      setRejectionPreset('blurry');
+                    }}
+                    className="rounded-full border border-rose-300 bg-white px-4 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                  >
+                    Reject ID
+                  </button>
+                  <button
+                    type="button"
+                    disabled={submittingDecision || !previewUrl}
+                    onClick={() => void handleApprove(inspectUser.uid, inspectUser.displayName ?? 'Volunteer')}
+                    className="rounded-full bg-[#1f6f5c] px-5 py-2 text-xs font-bold text-white shadow-xs hover:bg-[#185845] disabled:opacity-50"
+                  >
+                    {submittingDecision ? 'Approving…' : 'Approve & Verify Volunteer'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rejection Reason Modal */}
+      {rejectUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#131312]/60 p-4 backdrop-blur-xs vc-fade-up">
+          <div className="w-full max-w-md overflow-hidden rounded-3xl border border-[#ececea] bg-white p-6 shadow-2xl">
+            <h3 className="m-0 text-base font-bold text-[#131312]">
+              Reject ID Verification
+            </h3>
+            <p className="mt-1 text-xs text-[#4f4b46]">
+              Provide a clear reason so {rejectUser.displayName ?? 'the volunteer'} understands how to resolve the issue.
+            </p>
+
+            <div className="mt-4 space-y-3">
+              <label className="flex items-start gap-2 text-xs text-[#131312] cursor-pointer">
+                <input
+                  type="radio"
+                  name="preset"
+                  value="blurry"
+                  checked={rejectionPreset === 'blurry'}
+                  onChange={(e) => setRejectionPreset(e.target.value)}
+                  className="mt-0.5 text-[#1f6f5c]"
+                />
+                <span>Document image is illegible or too low resolution.</span>
+              </label>
+
+              <label className="flex items-start gap-2 text-xs text-[#131312] cursor-pointer">
+                <input
+                  type="radio"
+                  name="preset"
+                  value="expired"
+                  checked={rejectionPreset === 'expired'}
+                  onChange={(e) => setRejectionPreset(e.target.value)}
+                  className="mt-0.5 text-[#1f6f5c]"
+                />
+                <span>Document is expired or not an accepted institutional card.</span>
+              </label>
+
+              <label className="flex items-start gap-2 text-xs text-[#131312] cursor-pointer">
+                <input
+                  type="radio"
+                  name="preset"
+                  value="mismatch"
+                  checked={rejectionPreset === 'mismatch'}
+                  onChange={(e) => setRejectionPreset(e.target.value)}
+                  className="mt-0.5 text-[#1f6f5c]"
+                />
+                <span>Name on document does not match profile name.</span>
+              </label>
+
+              <label className="flex items-start gap-2 text-xs text-[#131312] cursor-pointer">
+                <input
+                  type="radio"
+                  name="preset"
+                  value="custom"
+                  checked={rejectionPreset === 'custom'}
+                  onChange={(e) => setRejectionPreset(e.target.value)}
+                  className="mt-0.5 text-[#1f6f5c]"
+                />
+                <span>Custom reason</span>
+              </label>
+
+              <textarea
+                rows={3}
+                value={rejectionReason}
+                onChange={(e) => setRejectionReason(e.target.value)}
+                placeholder="Additional details for volunteer (optional unless custom selected)..."
+                className="w-full rounded-xl border border-[#ececea] bg-[#fafaf8] p-3 text-xs text-[#131312] placeholder-[#8a847d] focus:border-[#1f6f5c] focus:outline-none"
+              />
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setRejectUser(null)}
+                className="rounded-full border border-[#ececea] bg-white px-4 py-2 text-xs font-semibold text-[#4f4b46] hover:bg-[#fafaf8]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={submittingDecision}
+                onClick={() => void handleReject()}
+                className="rounded-full bg-rose-600 px-5 py-2 text-xs font-bold text-white shadow-xs hover:bg-rose-700 disabled:opacity-50"
+              >
+                {submittingDecision ? 'Rejecting…' : 'Confirm Rejection'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+

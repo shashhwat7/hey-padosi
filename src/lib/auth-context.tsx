@@ -59,6 +59,12 @@ export interface UserDoc {
   verifiedHours?: number;
   trustScore?: number;
   idVerified?: boolean;
+  idVerificationStatus?: 'pending' | 'verified' | 'rejected';
+  idVerificationSubmittedAt?: Timestamp;
+  idVerificationReviewedAt?: Timestamp;
+  idVerificationReviewedBy?: string;
+  idVerificationRejectionReason?: string;
+  idVerifiedAt?: Timestamp;
 }
 
 export type AuthState =

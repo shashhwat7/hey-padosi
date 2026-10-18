@@ -138,7 +138,19 @@ export const applyModerationAction = onCall(
           endOtpSalt: FieldValue.delete(),
           endOtpExpiresAt: FieldValue.delete(),
           endOtpAttempts: FieldValue.delete(),
+          cancelledVolunteerIds: FieldValue.arrayUnion(userId),
         });
+
+        // Mark volunteer's offer doc as cancelled so they are excluded from re-dispatch
+        const volunteerOfferRef = taskDoc.ref.collection('offers').doc(userId);
+        batch.set(
+          volunteerOfferRef,
+          {
+            state: 'cancelled',
+            respondedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true },
+        );
 
         // Log audit event for task update
         const eventRef = taskDoc.ref.collection('events').doc();

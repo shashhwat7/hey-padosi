@@ -14,9 +14,10 @@ import {
   type ChangeEvent,
 } from 'react';
 import { doc, updateDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { ref as storageRef, uploadBytes } from 'firebase/storage';
 import { useAuthState } from '../../lib/auth-context';
-import { db, storage } from '../../lib/firebase';
+import { db, functions, storage } from '../../lib/firebase';
 import { OnboardingProgress } from '../../components/OnboardingProgress';
 import { Logo } from '../../components/Logo';
 
@@ -136,6 +137,16 @@ export default function ProfilePage() {
       }
 
       await updateDoc(doc(db(), 'users', user.uid), update);
+
+      if (idFile) {
+        try {
+          const submitFn = httpsCallable(functions(), 'submitIdVerification');
+          await submitFn();
+        } catch {
+          // Non-blocking for onboarding progression
+        }
+      }
+
       // ProtectedRoute will redirect once onSnapshot delivers updated doc:
       //   - volunteer / dual: → /onboarding/skills (step 4)
       //   - customer-only:    → /app

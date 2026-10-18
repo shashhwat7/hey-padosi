@@ -99,6 +99,7 @@ export const cancelAcceptedTask = onCall(
         endOtpSalt: FieldValue.delete(),
         endOtpExpiresAt: FieldValue.delete(),
         endOtpAttempts: FieldValue.delete(),
+        cancelledVolunteerIds: FieldValue.arrayUnion(volunteerUid),
       });
 
       // Mark volunteer's offer doc as cancelled so dispatchOffers excludes them from re-dispatch

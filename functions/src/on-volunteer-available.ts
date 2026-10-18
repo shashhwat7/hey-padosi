@@ -13,7 +13,7 @@
 // "time passed without acceptance" paths.
 
 import { getApps, initializeApp } from 'firebase-admin/app';
-import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { logger } from 'firebase-functions/v2';
 import { onDocumentUpdated } from 'firebase-functions/v2/firestore';
 import {
@@ -90,7 +90,15 @@ export const onVolunteerAvailable = onDocumentUpdated(
       const taskId = taskDoc.id;
 
       if (blockedUids.has(taskData.customerId)) continue;
+      const expiresAtMs = (taskData as { expiresAt?: Timestamp }).expiresAt?.toMillis?.();
+      if (typeof expiresAtMs === 'number' && Date.now() >= expiresAtMs) continue;
       if (!isEligible(uid, after, taskData)) continue;
+      if (
+        Array.isArray(taskData.cancelledVolunteerIds) &&
+        taskData.cancelledVolunteerIds.includes(uid)
+      ) {
+        continue;
+      }
 
       const offerRef = taskDoc.ref.collection('offers').doc(uid);
       const existing = await offerRef.get();

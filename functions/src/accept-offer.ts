@@ -13,7 +13,7 @@
 // prevents further accepts) so it lives outside the txn.
 
 import { getApps, initializeApp } from 'firebase-admin/app';
-import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { logger } from 'firebase-functions/v2';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { checkActiveStatus } from './moderation-helper';
@@ -29,6 +29,27 @@ const REGION = 'asia-south1';
 interface AcceptResponse {
   taskId: string;
   acceptedAt: number;
+}
+
+export function evaluateAcceptOfferExpiryPure(
+  task: { status?: string | undefined; expiresAtMs?: number | null | undefined },
+  nowMs: number,
+): { shouldAccept: boolean; isExpired: boolean; error?: string | undefined } {
+  if (task.status !== 'searching') {
+    return {
+      shouldAccept: false,
+      isExpired: false,
+      error: 'This task is no longer accepting volunteers.',
+    };
+  }
+  if (typeof task.expiresAtMs === 'number' && nowMs >= task.expiresAtMs) {
+    return {
+      shouldAccept: false,
+      isExpired: true,
+      error: 'This task has expired and is no longer accepting volunteers.',
+    };
+  }
+  return { shouldAccept: true, isExpired: false };
 }
 
 export const acceptOffer = onCall(
@@ -57,11 +78,28 @@ export const acceptOffer = onCall(
       if (!taskSnap.exists) {
         throw new HttpsError('not-found', 'Task no longer exists.');
       }
-      const task = taskSnap.data() as { status?: string };
+      const task = taskSnap.data() as {
+        status?: string;
+        expiresAt?: Timestamp;
+      };
       if (task.status !== 'searching') {
         throw new HttpsError(
           'failed-precondition',
           'This task is no longer accepting volunteers.',
+        );
+      }
+
+      const expiresAtMs = task.expiresAt?.toMillis?.();
+      if (typeof expiresAtMs === 'number' && Date.now() >= expiresAtMs) {
+        tx.update(taskRef, {
+          status: 'expired',
+          expiredAt: FieldValue.serverTimestamp(),
+          statusMessage: 'Task expired without an assigned volunteer.',
+          nextCheckAt: FieldValue.delete(),
+        });
+        throw new HttpsError(
+          'failed-precondition',
+          'This task has expired and is no longer accepting volunteers.',
         );
       }
 

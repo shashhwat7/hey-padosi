@@ -145,13 +145,26 @@ export const suggestNextTasks = onCall(
 
       const candidate = docSnap.data() as TaskDoc & {
         createdAt?: Timestamp;
+        expiresAt?: Timestamp;
       };
+
+      // Expiry check: exclude tasks whose expiry window has elapsed
+      const expiresAtMs = candidate.expiresAt?.toMillis?.();
+      if (typeof expiresAtMs === 'number' && Date.now() >= expiresAtMs) continue;
 
       // Dual-role check (§6.2): volunteer cannot be customer of suggested task
       if (candidate.customerId === volunteerUid) continue;
 
       // Block check (§6.4): exclude tasks from blocked customers
       if (blockedUserIds.has(candidate.customerId)) continue;
+
+      // Exclusion check: volunteer already cancelled for this task
+      if (
+        Array.isArray(candidate.cancelledVolunteerIds) &&
+        candidate.cancelledVolunteerIds.includes(volunteerUid)
+      ) {
+        continue;
+      }
 
       // Eligibility check using scoring.ts logic
       if (!isEligible(volunteerUid, syntheticUser, candidate)) continue;
@@ -193,6 +206,13 @@ export const suggestNextTasks = onCall(
         .collection('offers')
         .doc(volunteerUid);
       const offerSnap = await offerRef.get();
+
+      if (offerSnap.exists) {
+        const offerData = offerSnap.data() as { state?: string };
+        if (offerData.state === 'cancelled' || offerData.state === 'rejected') {
+          continue; // Never re-offer to a volunteer who cancelled or rejected
+        }
+      }
 
       if (!offerSnap.exists) {
         await offerRef.set({

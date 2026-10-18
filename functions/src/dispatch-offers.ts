@@ -18,6 +18,30 @@ if (getApps().length === 0) {
 
 const REGION = 'asia-south1';
 const INITIAL_BATCH_SIZE = 10;
+export function computeDispatchExclusionsPure(
+  task: { cancelledVolunteerIds?: string[] | undefined } | null | undefined,
+  existingOffers: Array<{ id: string; state?: string | undefined }>,
+): Set<string> {
+  const excluded = new Set<string>();
+  if (task && Array.isArray(task.cancelledVolunteerIds)) {
+    for (const uid of task.cancelledVolunteerIds) {
+      if (typeof uid === 'string' && uid.length > 0) {
+        excluded.add(uid);
+      }
+    }
+  }
+  for (const offer of existingOffers) {
+    if (
+      offer.state === 'cancelled' ||
+      offer.state === 'rejected' ||
+      offer.state === 'offered' ||
+      offer.state === 'accepted'
+    ) {
+      excluded.add(offer.id);
+    }
+  }
+  return excluded;
+}
 
 export const dispatchOffers = onDocumentWritten(
   { document: 'tasks/{taskId}', region: REGION },
@@ -69,19 +93,10 @@ export const dispatchOffers = onDocumentWritten(
       });
     }
 
-    // If transitioned back to searching, clear existing offers first
-    if (transitionedToSearching) {
-      logger.info('dispatchOffers: clearing existing offers for reassignment', {
-        taskId,
-      });
-      const existingOffers = await offersRef.get();
-      if (!existingOffers.empty) {
-        const deleteBatch = db.batch();
-        existingOffers.docs.forEach((doc) => deleteBatch.delete(doc.ref));
-        await deleteBatch.commit();
-      }
-    } else {
-      // For new tasks, verify subcollection is empty (idempotency check)
+
+    // For new tasks, verify subcollection is empty (idempotency check).
+    // If offers already exist on a newly created task, avoid duplicate dispatch.
+    if (wasCreatedSearching) {
       const existing = await offersRef.limit(1).get();
       if (!existing.empty) {
         logger.info('dispatchOffers skipped — offers subcollection not empty', {
@@ -91,7 +106,20 @@ export const dispatchOffers = onDocumentWritten(
       }
     }
 
-    const ranked = await rankForTask(afterData);
+    // Read existing offers without deleting them. This preserves audit history
+    // and ensures volunteers who cancelled or rejected are excluded from reassignment.
+    const existingOffersSnap = await offersRef.get();
+    const existingOffers = existingOffersSnap.docs.map((d) => ({
+      id: d.id,
+      state: (d.data() as { state?: string }).state,
+    }));
+
+    const excludedUids = computeDispatchExclusionsPure(
+      afterData,
+      existingOffers,
+    );
+
+    const ranked = await rankForTask(afterData, excludedUids);
     const top = ranked.slice(0, INITIAL_BATCH_SIZE);
     if (top.length === 0) {
       logger.info('dispatchOffers: no eligible volunteers', { taskId });

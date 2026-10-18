@@ -25,6 +25,7 @@ export interface TaskDoc {
   riskLevel: 'low' | 'medium';
   searchRadiusM: number;
   status: string;
+  cancelledVolunteerIds?: string[];
 }
 
 export interface UserDoc {
@@ -35,6 +36,7 @@ export interface UserDoc {
   availableNow?: boolean;
   lastKnownLocation?: { lat: number; lng: number; h3Cell: string };
   idVerified?: boolean;
+  idImagePath?: string;
   trustScore?: number;
   verifiedTaskCount?: number;
   openReportsCount?: number;
@@ -42,6 +44,7 @@ export interface UserDoc {
   banned?: boolean;
   suspendedUntil?: Timestamp;
   accountStatus?: string;
+  idVerificationStatus?: string;
 }
 
 export interface ScoreBreakdown {
@@ -145,10 +148,35 @@ export function haversineM(
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+export function filterCandidatesWithExclusionsPure(
+  candidates: Array<{ uid: string; score: number }>,
+  excludedUids?: Set<string> | string[],
+): Array<{ uid: string; score: number }> {
+  if (!excludedUids) return candidates;
+  const set = excludedUids instanceof Set ? excludedUids : new Set(excludedUids);
+  return candidates.filter((c) => !set.has(c.uid));
+}
+
 // Pulls available volunteers, post-filters and scores them, returns
 // ranked descending. Shared by both callable + trigger.
-export async function rankForTask(task: TaskDoc): Promise<RankedVolunteer[]> {
+export async function rankForTask(
+  task: TaskDoc,
+  excludedUids?: Set<string> | string[],
+): Promise<RankedVolunteer[]> {
   const db = getFirestore();
+
+  const exclusionSet =
+    excludedUids instanceof Set
+      ? new Set(excludedUids)
+      : new Set(excludedUids ?? []);
+
+  if (Array.isArray(task.cancelledVolunteerIds)) {
+    for (const uid of task.cancelledVolunteerIds) {
+      if (typeof uid === 'string' && uid.length > 0) {
+        exclusionSet.add(uid);
+      }
+    }
+  }
 
   // Query all blocks involving the customer to filter out mutual blocks
   const blockedUserIds = new Set<string>();
@@ -174,7 +202,10 @@ export async function rankForTask(task: TaskDoc): Promise<RankedVolunteer[]> {
   const candidates = availSnap.docs
     .map((d) => ({ uid: d.id, doc: d.data() as UserDoc }))
     .filter(
-      ({ uid, doc }) => isEligible(uid, doc, task) && !blockedUserIds.has(uid),
+      ({ uid, doc }) =>
+        isEligible(uid, doc, task) &&
+        !blockedUserIds.has(uid) &&
+        !exclusionSet.has(uid),
     );
 
   return candidates
